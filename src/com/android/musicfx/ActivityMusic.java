@@ -40,16 +40,11 @@ import android.content.DialogInterface;
 import android.content.DialogInterface.OnCancelListener;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.SharedPreferences;
-import android.content.SharedPreferences.Editor;
-import android.content.res.ColorStateList;
-import android.content.res.Configuration;
-import android.support.v4.content.ContextCompat;
-import android.graphics.Color;
-import android.graphics.drawable.ColorDrawable;
+import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.audiofx.AudioEffect;
 import android.media.audiofx.AudioEffect.Descriptor;
+import android.media.audiofx.Virtualizer;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.SystemProperties;
@@ -250,12 +245,7 @@ public class ActivityMusic extends AppCompatActivity {
 
             if (effect.type.equals(AudioEffect.EFFECT_TYPE_VIRTUALIZER)) {
                 mVirtualizerSupported = true;
-                if (effect.uuid.equals(UUID.fromString("1d4033c0-8557-11df-9f2d-0002a5d5c51b"))
-                        || effect.uuid.equals(UUID.fromString("e6c98a16-22a3-11e2-b87b-f23c91aec05e"))
-                        || effect.uuid.equals(UUID.fromString("d3467faa-acc7-4d34-acaf-0002a5d5c51b"))) {
-                    mVirtualizerIsHeadphoneOnly = true;
-                    Log.d(TAG, effect.name.toString() + ", mVirtualizerIsHeadphoneOnly = " + mVirtualizerIsHeadphoneOnly);
-                }
+                mVirtualizerIsHeadphoneOnly = !isVirtualizerTransauralSupported();
             } else if (effect.type.equals(AudioEffect.EFFECT_TYPE_BASS_BOOST)) {
                 mBassBoostSupported = true;
             } else if (effect.type.equals(AudioEffect.EFFECT_TYPE_EQUALIZER)) {
@@ -276,6 +266,10 @@ public class ActivityMusic extends AppCompatActivity {
         mHighlightColor = getResources().getColor(R.color.highlight_gallery_text);
         mTextColor = getResources().getColor(R.color.textColor);
         mSpinoffColor = getResources().getColor(R.color.spinner_disabled);
+
+        // Set accessibility label for bass boost and virtualizer strength seekbars.
+        findViewById(R.id.bBStrengthText).setLabelFor(R.id.bBStrengthSeekBar);
+        findViewById(R.id.vIStrengthText).setLabelFor(R.id.vIStrengthSeekBar);
 
         // Fill array with presets from AudioEffects call.
         // allocate a space for 1 extra strings (User)
@@ -383,166 +377,21 @@ public class ActivityMusic extends AppCompatActivity {
                 reverbSpinnerInit();
             }
 
-            View spSpinnerContainer = findViewById(R.id.swSpinnerContainer);
-            mSWStrengthSpinner = (Spinner) findViewById(R.id.swSpinner);
-            if (mStereoWideSupported) {
-                mSWStrength = ControlPanelEffect.getParameterInt(mContext, mCurrentLevel,
-                        ControlPanelEffect.Key.sw_strength);
-                mSWStrengthPrevious = mSWStrength;
-                stereoWideSpinnerInit();
-            } else {
-                spSpinnerContainer.setVisibility(View.GONE);
-            }
+            ActionBar ab = getActionBar();
+            final int padding = getResources().getDimensionPixelSize(
+                    R.dimen.action_bar_switch_padding);
+            mToggleSwitch.setPadding(0,0, padding, 0);
+            ab.setCustomView(mToggleSwitch, new ActionBar.LayoutParams(
+                    ActionBar.LayoutParams.WRAP_CONTENT,
+                    ActionBar.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER_VERTICAL | Gravity.RIGHT));
+            ab.setDisplayOptions(ActionBar.DISPLAY_SHOW_TITLE | ActionBar.DISPLAY_SHOW_CUSTOM);
+
         } else {
             mViewGroup.setVisibility(View.GONE);
             ((TextView) findViewById(R.id.noEffectsTextView)).setVisibility(View.VISIBLE);
         }
 
-        mDrawerLayout = (DrawerLayout) findViewById(R.id.drawer_layout);
-        mDrawerList = (NavigationView) findViewById(R.id.left_drawer);
-
-        // Set the list's click listener
-        mDrawerList.setNavigationItemSelectedListener(new NavigationView.OnNavigationItemSelectedListener() {
-            @Override
-            public boolean onNavigationItemSelected(MenuItem item) {
-                int id = item.getItemId();
-                mDrawerLayout.closeDrawer(mDrawerList);
-                if (id == R.id.menu_speaker) {
-                    updateForLevel(ControlPanelEffect.SPEAKER_PREF_SCOPE);
-                } else if (id == R.id.menu_headset) {
-                    updateForLevel(ControlPanelEffect.HEADSET_PREF_SCOPE);
-                } else if (id == R.id.menu_bluetooth) {
-                    updateForLevel(ControlPanelEffect.BLUETOOTH_PREF_SCOPE);
-                } else if (id == R.id.save_preset) {
-                    needRequestStoragePermission(new Runnable() {
-                        @Override
-                        public void run() {
-                            savePresetDialog();
-                        }
-                    });
-                } else if (id == R.id.load_preset) {
-                    needRequestStoragePermission(new Runnable() {
-                        @Override
-                        public void run() {
-                            loadPresetDialog();
-                        }
-                    });
-                }
-
-                return true;
-            }
-        });
-        mDrawerToggle = new ActionBarDrawerToggle(this, mDrawerLayout, toolbar,
-                R.string.drawer_open, R.string.drawer_close);
-        mDrawerLayout.setDrawerListener(mDrawerToggle);
-        mDrawerToggle.syncState();
-    }
-
-    @Override
-    public void setTitle(CharSequence title) {
-        getSupportActionBar().setTitle(title);
-    }
-
-    @Override
-    protected void onPostCreate(Bundle savedInstanceState) {
-        super.onPostCreate(savedInstanceState);
-        // Sync the toggle state after onRestoreInstanceState has occurred.
-        mDrawerToggle.syncState();
-    }
-
-    @Override
-    public void onConfigurationChanged(Configuration newConfig) {
-        super.onConfigurationChanged(newConfig);
-        // Pass any configuration change to the drawer toggls
-        mDrawerToggle.onConfigurationChanged(newConfig);
-    }
-
-    private void updateForLevel(String level) {
-        if (!level.equals(mCurrentLevel)) {
-            mCurrentLevel = level;
-            mIsHeadsetOn = mCurrentLevel.equals(ControlPanelEffect.HEADSET_PREF_SCOPE);
-            mIsSpeakerOn = mCurrentLevel.equals(ControlPanelEffect.SPEAKER_PREF_SCOPE);
-            mIsBluetoothOn = mCurrentLevel.equals(ControlPanelEffect.BLUETOOTH_PREF_SCOPE);
-            updateUI();
-            updateTitle();
-        }
-    }
-
-    private void updateTitle() {
-        if (mCurrentLevel == ControlPanelEffect.SPEAKER_PREF_SCOPE) {
-            setTitle(getResources().getString(R.string.drawer_item_speaker));
-            mDrawerList.getMenu().findItem(R.id.menu_speaker).setChecked(true);
-        } else if (mCurrentLevel == ControlPanelEffect.HEADSET_PREF_SCOPE) {
-            setTitle(getResources().getString(R.string.drawer_item_headset));
-            mDrawerList.getMenu().findItem(R.id.menu_headset).setChecked(true);
-        } else if (mCurrentLevel == ControlPanelEffect.BLUETOOTH_PREF_SCOPE) {
-            setTitle(getResources().getString(R.string.drawer_item_bluetooth));
-            mDrawerList.getMenu().findItem(R.id.menu_bluetooth).setChecked(true);
-        }
-    }
-
-    private void updateCurrentLevelInfo(String level) {
-        if (level == ControlPanelEffect.SPEAKER_PREF_SCOPE) {
-            mCurrentLevelText.setText(getResources().getString(R.string.drawer_item_speaker));
-            mCurrentLevelText.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_speaker, 0, 0, 0);
-        } else if (level == ControlPanelEffect.HEADSET_PREF_SCOPE) {
-            mCurrentLevelText.setText(getResources().getString(R.string.drawer_item_headset));
-            mCurrentLevelText.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_headphones, 0, 0, 0);
-        } else if (level == ControlPanelEffect.BLUETOOTH_PREF_SCOPE) {
-            mCurrentLevelText.setText(getResources().getString(R.string.drawer_item_bluetooth));
-            mCurrentLevelText.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_bluetooth, 0, 0, 0);
-        }
-    }
-
-    private final String localizePresetName(final String name) {
-        final String[] names = {
-                "Acoustic", "Bass Booster", "Bass Reducer", "Classical", "Deep",
-                "Flat", "R&B", "Rock", "Small Speakers", "Treble Booster", "Treble Reducer", "Vocal Booster"
-        };
-        final int[] ids = {
-                R.string.acoustic, R.string.bass_booster, R.string.bass_reducer, R.string.classical, R.string.deep,
-                R.string.flat, R.string.r_and_b, R.string.rock, R.string.small_speakers, R.string.treble_booster, R.string.treble_reducer, R.string.vocal_booster
-        };
-
-        for (int i = names.length - 1; i >= 0; --i) {
-            if (names[i].equals(name)) {
-                return getString(ids[i]);
-            }
-        }
-        return name;
-    }
-
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.toolbar_menu, menu);
-        mToolbarSwitch = (Switch) menu.findItem(R.id.toolbar_switch).getActionView().findViewById(R.id.toolbar_switch_button);
-        mToolbarSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                // set parameter and state
-                ControlPanelEffect.setEnabled(mContext, mCurrentLevel, isChecked);
-                // Enable Linear layout (in scroll layout) view with all
-                // effect contents depending on checked state
-                setEnabledAllChildren(mViewGroup, isChecked);
-                // update UI according to headset state
-                updateUIHeadset(false);
-                setInterception(isChecked);
-            }
-        });
-        updateUI();
-        return true;
-    }
-
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        int id = item.getItemId();
-        if (mDrawerToggle.onOptionsItemSelected(item)) {
-            return true;
-        }
-        if (id == R.id.toolbar_switch) {
-            return true;
-        }
-        return super.onOptionsItemSelected(item);
     }
 
     /*
@@ -586,9 +435,11 @@ public class ActivityMusic extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        try {
-            unregisterReceiver(mPrefLevelChanged);
-        } catch (Exception e) {
+        // Unregister for broadcast intents. (These affect the visible UI,
+        // so we only care about them while we're in the foreground.)
+        if ((mVirtualizerSupported) || (mBassBoostSupported) || (mEqualizerSupported)
+                || (mPresetReverbSupported)) {
+            unregisterReceiver(mReceiver);
         }
     }
 
@@ -917,6 +768,15 @@ public class ActivityMusic extends AppCompatActivity {
                 centerFreqHz = centerFreqHz / 1000;
                 unitPrefix = "k";
             }
+            ((TextView) eqcontainer.findViewById(EQViewElementIds[band][0])).setText(
+                    format("%.0f ", centerFreqHz) + unitPrefix + "Hz");
+            mEqualizerSeekBar[band] = (SeekBar) eqcontainer
+                    .findViewById(EQViewElementIds[band][1]);
+            eqcontainer.findViewById(EQViewElementIds[band][0])
+                    .setLabelFor(EQViewElementIds[band][1]);
+            mEqualizerSeekBar[band].setMax(mEqualizerMaxBandLevel - mEqualizerMinBandLevel);
+            mEqualizerSeekBar[band].setOnSeekBarChangeListener(this);
+        }
 
             final Visualizer v = new Visualizer(mContext);
             v.setText(format("%.0f", centerFreqHz) + unitPrefix);
@@ -1013,240 +873,20 @@ public class ActivityMusic extends AppCompatActivity {
         toast.show();
     }
 
-    private boolean isServiceRunning() {
-        final ActivityManager manager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-        for (RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
-            if (service.service.getClassName().equals(getPackageName() + ".SystemService")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    public void savePresetDialog() {
-        // We first list existing presets
-        File presetsDir = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + PRESETS_FOLDER);
-        presetsDir.mkdirs();
-
-        Log.e(TAG, "Saving preset to " + presetsDir.getAbsolutePath());
-
-        // The first entry is "New preset", so we offset
-        File[] presets = presetsDir.listFiles((FileFilter) null);
-        final String[] names = new String[presets != null ? presets.length + 1 : 1];
-        names[0] = getString(R.string.new_preset);
-        if (presets != null) {
-            for (int i = 0; i < presets.length; i++) {
-                names[i + 1] = presets[i].getName();
-            }
-        }
-
-        AlertDialog.Builder builder = new AlertDialog.Builder(ActivityMusic.this);
-        builder.setTitle(R.string.save_preset)
-                .setItems(names, new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-                        if (which == 0) {
-                            // New preset, we ask for the name
-                            AlertDialog.Builder inputBuilder = new AlertDialog.Builder(ActivityMusic.this);
-                            inputBuilder.setTitle(R.string.new_preset);
-
-                            // Set an EditText view to get user input
-                            final EditText input = new EditText(ActivityMusic.this);
-                            inputBuilder.setView(input);
-
-                            inputBuilder.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
-                                public void onClick(DialogInterface dialog, int whichButton) {
-                                    String value = input.getText().toString();
-                                    savePreset(value);
-                                }
-                            });
-                            inputBuilder.setNegativeButton(android.R.string.cancel, null);
-
-                            inputBuilder.show();
-                        } else {
-                            savePreset(names[which]);
-                        }
-                    }
-                });
-        Dialog dlg = builder.create();
-        dlg.show();
-    }
-
-    public void loadPresetDialog() {
-        File presetsDir = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + PRESETS_FOLDER);
-        presetsDir.mkdirs();
-
-        File[] presets = presetsDir.listFiles((FileFilter) null);
-        final String[] names = new String[presets != null ? presets.length : 0];
-        if (presets != null) {
-            for (int i = 0; i < presets.length; i++) {
-                names[i] = presets[i].getName();
-            }
-        }
-
-        AlertDialog.Builder builder = new AlertDialog.Builder(ActivityMusic.this);
-        builder.setTitle(R.string.load_preset)
-                .setItems(names, new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int which) {
-                        loadPreset(names[which]);
-                    }
-                });
-        builder.create().show();
-    }
-
-    public void savePreset(String name) {
-        final String spDir = getApplicationInfo().dataDir + "/shared_prefs/";
-
-        // Copy the SharedPreference to our output directory
-        File presetDir = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + PRESETS_FOLDER + "/" + name);
-        presetDir.mkdirs();
-
+    private static boolean isVirtualizerTransauralSupported() {
+        Virtualizer virt = null;
+        boolean transauralSupported = false;
         try {
-            for (String prefLevel : ControlPanelEffect.ALL_PREF_SCOPES) {
-                copy(new File(spDir, prefLevel + ".xml"), new File(presetDir, prefLevel + ".xml"));
-            }
-        } catch (IOException e) {
-            Log.e(TAG, "Cannot save preset", e);
-        }
-
-        Toast.makeText(getApplicationContext(), mContext.getString(R.string.preset_save_toast), Toast.LENGTH_SHORT).show();
-    }
-
-    public void loadPreset(String name) {
-        File presetDir = new File(Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + PRESETS_FOLDER + "/" + name);
-        if (!presetDir.exists()) {
-            return;
-        }
-
-        try {
-            loadAllXMLFile(presetDir.getAbsolutePath());
-            updateUI();
+            virt = new Virtualizer(0, android.media.AudioSystem.newAudioSessionId());
+            transauralSupported = virt.canVirtualize(AudioFormat.CHANNEL_OUT_STEREO,
+                    Virtualizer.VIRTUALIZATION_MODE_TRANSAURAL);
         } catch (Exception e) {
-            Log.e(TAG, "LoadPreset Exception : " + e);
-        }
-
-        Toast.makeText(getApplicationContext(), mContext.getString(R.string.preset_load_toast), Toast.LENGTH_SHORT).show();
-    }
-
-
-    public static void copy(File src, File dst) throws IOException {
-        InputStream in = new FileInputStream(src);
-        OutputStream out = new FileOutputStream(dst);
-
-        // Transfer bytes from in to out
-        byte[] buf = new byte[1024];
-        int len;
-        while ((len = in.read(buf)) > 0) {
-            out.write(buf, 0, len);
-        }
-        in.close();
-        out.close();
-    }
-
-    private boolean needRequestStoragePermission(Runnable runWithPerms) {
-        boolean needRequest = false;
-        String[] permissions = {
-                Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                Manifest.permission.READ_EXTERNAL_STORAGE
-        };
-        ArrayList<String> permissionList = new ArrayList<String>();
-        for (String permission : permissions) {
-            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
-                permissionList.add(permission);
-                needRequest = true;
+        } finally {
+            if (virt != null) {
+                virt.release();
             }
         }
-
-        if (needRequest) {
-            int count = permissionList.size();
-            if (count > 0) {
-                String[] permissionArray = new String[count];
-                for (int i = 0; i < count; i++) {
-                    permissionArray[i] = permissionList.get(i);
-                }
-                mDoAfterPermCheck = runWithPerms;
-                requestPermissions(permissionArray, PERMISSION_REQUEST_STORAGE);
-            }
-        } else {
-            runWithPerms.run();
-        }
-
-        return needRequest;
-    }
-
-    private boolean checkPermissionGrantResults(int[] grantResults) {
-        for (int result : grantResults) {
-            if (result != PackageManager.PERMISSION_GRANTED) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String permissions[],
-                                           int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        switch (requestCode) {
-            case PERMISSION_REQUEST_STORAGE: {
-                if (checkPermissionGrantResults(grantResults)) {
-                    if (mDoAfterPermCheck != null) {
-                        mDoAfterPermCheck.run();
-                        mDoAfterPermCheck = null;
-                    }
-                }
-            }
-        }
-    }
-
-    private void loadRessourcesFromXmlParser(XmlPullParser parser, String prefLevel) throws XmlPullParserException, IOException {
-        int eventType = parser.getEventType();
-
-        final SharedPreferences sharedPreferences = getSharedPreferences(prefLevel, Context.MODE_PRIVATE);
-        SharedPreferences.Editor editor = sharedPreferences.edit();
-
-        do {
-            if (eventType != XmlPullParser.START_TAG) {
-                continue;
-            }
-            switch (parser.getName()) {
-                case "boolean":
-                    editor.putBoolean(parser.getAttributeValue(null, "name"), Boolean.parseBoolean(parser.getAttributeValue(null, "value")));
-                    break;
-                case "int":
-                    editor.putInt(parser.getAttributeValue(null, "name"), Integer.parseInt(parser.getAttributeValue(null, "value")));
-                    break;
-                case "string":
-                    editor.putString(parser.getAttributeValue(null, "name"), parser.getAttributeValue(null, "value"));
-                default:
-                    break;
-            }
-        } while ((eventType = parser.next()) != XmlPullParser.END_DOCUMENT);
-
-        editor.commit();
-    }
-
-    private void loadXMLFile(String xmlFileName, String prefLevel) throws XmlPullParserException, IOException {
-
-        InputStream in = null;
-        XmlPullParserFactory factory = null;
-        XmlPullParser parser = null;
-
-        try {
-            factory = XmlPullParserFactory.newInstance();
-            parser = factory.newPullParser();
-            in = new FileInputStream(xmlFileName);
-            parser = factory.newPullParser();
-            parser.setInput(in, "UTF-8");
-            loadRessourcesFromXmlParser(parser, prefLevel);
-        } catch (Exception e) {
-            Log.e(TAG, "loadXMLFile Exception :" + e);
-        }
-    }
-
-    private void loadAllXMLFile(String fromDir) throws XmlPullParserException, IOException {
-        for (String prefLevel : ControlPanelEffect.ALL_PREF_SCOPES) {
-            loadXMLFile(new File(fromDir, prefLevel + ".xml").getAbsolutePath(), prefLevel);
-        }
+        return transauralSupported;
     }
 }
 
